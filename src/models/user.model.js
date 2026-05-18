@@ -53,9 +53,10 @@ const userSchema = new mongoose.Schema({
 },{timestamps:true})
 
 userSchema.pre("save" , async function(){
-    if(!this.isModified("password")) return;
+    if(!this.isModified("password")) return ;
 
     this.password = await bcrypt.hash(this.password , 10)
+    // next();
 })
 
 userSchema.methods.isPasswordCorrect = async function(password) {
@@ -64,8 +65,8 @@ userSchema.methods.isPasswordCorrect = async function(password) {
 }
 
 
-userSchema.methods.generateAccessToken = async function() {
-    const accessToken = await jwt.sign(
+userSchema.methods.generateAccessToken = function() {
+    const accessToken =  jwt.sign(
         {
             _id: this._id,
             email:this.email,
@@ -78,23 +79,23 @@ userSchema.methods.generateAccessToken = async function() {
         }
     )
 
-    console.log(`\n access token at model ${accessToken} `);
+    // console.log(`\n access token at model ${accessToken} `);
     
     return accessToken;
     
 }
 
-userSchema.methods.generateRefreshToken = async function(){
-    const refreshToken = await  jwt.sign(
+userSchema.methods.generateRefreshToken = function(){
+    const refreshToken =  jwt.sign(
         {
             _id: this._id
         },
         process.env.REFRESH_TOKEN_SECRET,
         {
-            expiresIn: REFRESH_TOKEN_EXPIRY
+            expiresIn: process.env.REFRESH_TOKEN_EXPIRY
         }
     )
-    console.log(`\n refresh token at model ${refreshToken}`);
+    // console.log(`\n refresh token at model ${refreshToken}`);
     return refreshToken;
     
 }
