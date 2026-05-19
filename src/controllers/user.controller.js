@@ -3,7 +3,6 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
-import * as userRepository from "../repositories/user.repository.js";
 import jwt from "jsonwebtoken"
 
 const registerUser = asyncHandler(async(req ,res)=>{
@@ -245,9 +244,70 @@ const getUserProfile = asyncHandler(async (req, res) => {
         throw new ApiError(401, "Unauthorized request");
     }
 
+
+    if(!userId){
+            throw new ApiError(404 , "User Id is missing")
+        }
     
-    const baseUser = await userRepository.getUserDetails(userId)
-    const finalStats = await userRepository.getUserGameStats(userId)
+    const baseUser = await User.findById(userId)
+    if(!baseUser){
+        throw new ApiError(404 , "User not found")
+    }
+
+      // INDUSTRY BEST PRACTICE: Player Analytics Aggregation
+            // Hum GameResult collection me check karenge ki is player ne kya kya teer maare hain
+            const playerStats = await GameResult.aggregate([
+                {
+                    // Pehle filter karo sirf is specific player ke saare match results
+                    $match: {
+                        "leaderboard.player": new mongoose.Types.ObjectId(userId)
+                    }
+                },
+                {
+                    // Saare matches ka data aapas me jod kar calculations karo
+                    $group: {
+                        _id: null,
+                        totalGamesPlayed: { $sum: 1 }, // Total kitne matches khele
+                        
+                        // Ye check karega ki winner field user ki ID se match karti hai ya nahi
+                        totalWins: {
+                            $sum: {
+                                $cond: [{ $eq: ["$winner", new mongoose.Types.ObjectId(userId)] }, 1, 0]
+                            }
+                        },
+                        
+                        // Is player ke har match ke finalScore ka total sum nikaalo
+                        totalScore: {
+                            // $unwind ke bina embedded array ka sum nikalne ka tareeqa:
+                            $sum: {
+                                $let: {
+                                    vars: {
+                                        playerEntry: {
+                                            $filter: {
+                                                input: "$leaderboard",
+                                                as: "lb",
+                                                cond: { $eq: ["$$lb.player", new mongoose.Types.ObjectId(userId)] }
+                                            }
+                                        }
+                                    },
+                                    in: { $arrayElemAt: ["$$playerEntry.finalScore", 0] }
+                                }
+                            }
+                        }
+                    }
+                }
+            ]);
+        
+            // Agar user ne abhi tak ek bhi game nahi khela, toh default stats set kardo
+            const defaultStats = {
+                totalGamesPlayed: 0,
+                totalWins: 0,
+                totalScore: 0
+            };
+        
+            const finalStats = playerStats.length > 0 ? playerStats[0] : defaultStats;
+            delete finalStats._id; // Extra MongoDB metadata remove karne ke liye
+    
 
    
     

@@ -4,7 +4,6 @@ const roomSchema = new mongoose.Schema({
     roomCode: {
         type : String,
         required : true,
-        index: true,
         maxlength : 6,
         minlength: 6,
         uppercase: true

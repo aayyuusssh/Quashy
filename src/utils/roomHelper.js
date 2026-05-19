@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import { Room } from "../models/Room.js";
+import { Room } from "../models/room.model.js";
 import { ApiError } from "./ApiError.js";
 
 

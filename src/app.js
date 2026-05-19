@@ -16,8 +16,15 @@ app.use(cookieParser())
 
 
 import userRouter from "../src/routes/user.routes.js"
+import roomRouter from "./routes/room.routes.js";
+import questionRouter from "../src/routes/question.routes.js";
+import roomQuestionRouter from "../src/routes/roomQuestion.routes.js";
+
 
 app.use("/api/v1/users",userRouter)
+app.use("/api/v1/rooms",roomRouter)
+app.use("/api/v1/questions", questionRouter);
+app.use("/api/v1/room-questions", roomQuestionRouter);
 
 
 app.use((err, req, res, next) => {
