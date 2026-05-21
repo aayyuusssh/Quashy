@@ -57,7 +57,7 @@ const registerUser = asyncHandler(async(req ,res)=>{
     })
 
     const createdUser = await User.findById(user?._id).select("-password -refreshToken")
-    console.log(createdUser);
+    // console.log(createdUser);
     
     if(!createdUser){
         throw new ApiError(500 , "Something went wrong while registering the user")
@@ -101,8 +101,8 @@ const loginUser = asyncHandler(async(req , res)=> {
 
     const {email , username , password} = req.body
 
-    console.log(email)
-    console.log(username)
+    // console.log(email)
+    // console.log(username)
 
     if(!email && !username){
         throw new ApiError(400 , "email or username is required")
@@ -112,7 +112,7 @@ const loginUser = asyncHandler(async(req , res)=> {
         $or:[{email},{username}]
     }).select("+password")
 
-    console.log(user);
+    // console.log(user);
     
     if(!user){
         throw new ApiError(401 , "No user exists ")
