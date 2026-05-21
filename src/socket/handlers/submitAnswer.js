@@ -1,76 +1,100 @@
 import { RoomQuestion } from "../../models/roomQuestion.model.js";
 import { Answer } from "../../models/answer.model.js";
+import { Room } from "../../models/room.model.js";
 import { incrementRedisPlayerScore } from "../../runtime/roomStore.js";
-
-
-//   Listens for individual real-time option selection choices from active player stream pipes
 
 export const handleSubmitAnswer = (io, socket) => {
     socket.on("submit-answer", async (payload) => {
         try {
-            // Sockets securely read roomCode and userId bound to this socket instance context during join-lobby!
             const { roomCode, userId } = socket;
             const { sequenceNumber, submittedOptionId, serverTimerSnapshot } = payload;
 
-            if (!roomCode || !userId || !submittedOptionId) return;
+            // What did the backend actually receive?
+            // console.log(" [CHECKPOINT 1] Received Payload:", {
+            //     socketRoomCode: roomCode,
+            //     socketUserId: userId,
+            //     payloadSeq: sequenceNumber,
+            //     payloadOption: submittedOptionId,
+            //     payloadTimer: serverTimerSnapshot
+            // });
 
-            //  TIMING VALIDATION ATTACK SHIELD
-            // If the server snapshot reads 0 or less, the round is physically over. Lock data entry!
+            if (!roomCode || !userId || !submittedOptionId) {
+                console.log(" Missing core fields in socket context or payload");
+                return;
+            }
+
+            // TIMING VALIDATION SHIELD
             if (serverTimerSnapshot <= 0) {
+                console.log("Dropped: Time already expired! snapshot <= 0");
                 return socket.emit("submission-error", { message: "Time expired! Submission dropped." });
             }
 
-            //  FETCH QUESTION ANSWER SCHEMA KEY RULES
+            // FETCH REAL ACTIVE ROOM DATA
+            const activeRoomData = await Room.findOne({ roomCode: roomCode, status: "active" });
+            
+            // console.log(" [CHECKPOINT 2] Active Room DB Query Result:", activeRoomData ? `Found Room ID: ${activeRoomData._id}` : "NOT FOUND IN DB");
+
+            if (!activeRoomData) {
+                console.log(` No active room found for code ${roomCode}`);
+                return;
+            }
+
+            // FETCH QUESTION MAPPING
             const mapping = await RoomQuestion.findOne({ 
-                room: socket.roomObjectId || payload.roomId, // Handles clean fallback mapping hooks
-                sequenceNumber: sequenceNumber 
+                room: activeRoomData._id, 
+                sequenceNumber: Number(sequenceNumber) 
             }).populate("question");
 
-            if (!mapping) return;
+            //  Did we find the question sequence mapping?
+            // console.log("[CHECKPOINT 3] RoomQuestion Mapping Query Result:", mapping ? `Found Question: ${mapping.question?.questionText?.substring(0, 20)}...` : "NOT FOUND IN DB");
+
+            if (!mapping) {
+                console.log(` No question mapped for sequenceNumber ${sequenceNumber} in this room.`);
+                return;
+            }
+
             const questionData = mapping.question;
 
-            //  SECURE PREVENT DOUBLE SUBMISSIONS (MongoDB Compound Index Shield)
-            // Check if this player has already written a row entry for this specific question round
+            //  SECURE PREVENT DOUBLE SUBMISSIONS
             const alreadyAnswered = await Answer.findOne({
                 room: mapping.room,
                 player: userId,
                 question: questionData._id
             });
 
+            //  DEBUG CHECKPOINT 4: Has the player already submitted for this question?
+            // console.log("  Double Submission Check Result:", alreadyAnswered ? "ALREADY ANSWERED" : "CLEAN (FIRST TIME)");
+
             if (alreadyAnswered) {
+                console.log(" Dropped at Checkpoint 4: Prevented duplicate submission attempt");
                 return socket.emit("submission-error", { message: "Security Warning: You have already submitted an answer for this round!" });
             }
 
-            //  VERIFY LOGIC CORRECTNESS MATCHES
+            //  EVALUATION & SCORING
             const isCorrectAnswer = questionData.correctAnswer === submittedOptionId.trim().toUpperCase();
-            
             let pointsEarned = 0;
             const totalRoundDuration = questionData.duration || 30;
 
             if (isCorrectAnswer) {
-                // Execute our server-side Speed Scoring Matrix Formula
                 const speedFraction = serverTimerSnapshot / totalRoundDuration;
-                pointsEarned = 500 + Math.round(speedFraction * 500); // Scales scale seamlessly from 500 to 1000 points
+                pointsEarned = 500 + Math.round(speedFraction * 500);
             }
 
-            //  HIGH SPEED SCORING COMMIT (Redis RAM)
             if (pointsEarned > 0) {
                 await incrementRedisPlayerScore(roomCode, userId, pointsEarned);
-                console.log(`Player [${userId}] earned +${pointsEarned} pts inside Redis memory pool.`);
+                console.log(` Player [${userId}] earned +${pointsEarned} pts inside Redis memory pool.`);
             }
 
-            //  PERSISTENT SYSTEM TRANSACTION WRITE (MongoDB History Logs)
-            // We write a historical log entry for long-term database analytics
             await Answer.create({
                 room: mapping.room,
                 player: userId,
                 question: questionData._id,
                 submittedAnswer: submittedOptionId,
                 isCorrect: isCorrectAnswer,
-                responseTimeMs: (totalRoundDuration - serverTimerSnapshot) * 1000 // Convert delta to milliseconds metric
+                responseTimeMs: (totalRoundDuration - serverTimerSnapshot) * 1000
             });
 
-            // Return individual acknowledgement receipt back to this specific user's browser view
+            // console.log("SUCCESS: Sending acknowledgment packet back to client!");
             socket.emit("answer-acknowledged", { 
                 success: true, 
                 isCorrect: isCorrectAnswer,

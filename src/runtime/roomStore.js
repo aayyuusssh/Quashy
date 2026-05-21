@@ -53,6 +53,6 @@ export const getRedisLiveLeaderboard = async (roomCode) => {
     
     // Node-Redis v4 dynamic standard approach for reverse zset fetches
     return await redisClient.zRangeWithScores(key, 0, -1, {
-        REV: true // 🚀This single flag tells Redis to automatically sort from HIGHEST to LOWEST score!
+        REV: true // This single flag tells Redis to automatically sort from HIGHEST to LOWEST score!
     });
 };
