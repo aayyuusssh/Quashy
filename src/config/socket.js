@@ -1,6 +1,7 @@
 import { Server } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter"; // 1. Import the multi-server clustering adapter
 import { redisClient, redisSubscriber } from "./redis.js";
+import { verifySocketJWT } from "../middlewares/socketAuth.middleware.js"; 
 
 let io = null;
 
@@ -15,6 +16,7 @@ export const initSocketServer = (httpServer) => {
     // ENTERPRISE INTEGRATION GATEWAY: Attach Socket.io directly to your Redis memory layers.
     // The main client publishes outgoing events, while the subscriber listens for incoming state changes.
     io.adapter(createAdapter(redisClient, redisSubscriber));
+    io.use(verifySocketJWT);
 
     console.log("Socket.io Server successfully bound to Redis memory adapter layer.");
     return io;

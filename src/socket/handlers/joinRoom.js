@@ -15,11 +15,15 @@ export const handleJoinLobby = (io, socket) => {
     // We register an active message event listener on this player's specific socket pipe
     socket.on("join-lobby", async (payload) => {
         try {
-            const { roomCode, userId } = payload;
+            const { roomCode } = payload;
+            if (!socket.user){
+               return socket.emit("auth-error", { message: "Authentication required" });
+            }
+            const userId = socket.user?._id
 
-            // 1. INPUT DATA SANITIZATION
-            if (!roomCode || !userId) {
-                return socket.emit("join-error", { message: "Invalid payload: roomCode and userId are required" });
+            //  INPUT DATA SANITIZATION
+            if (!roomCode ) {
+                return socket.emit("join-error", { message: "Invalid payload: roomCode is required" });
             }
 
             const cleanCode = roomCode.toUpperCase().trim();
@@ -40,11 +44,11 @@ export const handleJoinLobby = (io, socket) => {
                 return socket.emit("room-full", { message: "This game room has hit maximum player capacity" });
             }
 
-            // 4. MEMORY STATE COMMIT
+            //  MEMORY STATE COMMIT
             // Add the player's User ID to our ultra-fast Redis Set
             await addPlayerToRedisLobby(cleanCode, userId);
 
-            // 5. PIPE BINDING
+            //  PIPE BINDING
             // Instruct Socket.io to physically subscribe this individual user's socket connection 
             // into a scoped network chat room channel matching the 6-digit code.
             socket.join(cleanCode);
@@ -54,7 +58,7 @@ export const handleJoinLobby = (io, socket) => {
             socket.roomCode = cleanCode;
             socket.userId = userId;
 
-            // 6. REAL-TIME SYNCHRONIZATION DATA HYDRATION
+            //  REAL-TIME SYNCHRONIZATION DATA HYDRATION
             // Fetch the entire active array list of User IDs from our Redis set
             const activePlayerIds = await getRedisLobbyPlayers(cleanCode);
 

@@ -1,7 +1,8 @@
-import { handleJoinLobby } from "./Handlers/joinRoom.js"; //  Join room handler ko import kiya
+import { handleJoinLobby } from "./handlers/joinRoom.js"; //  Join room handler ko import kiya
 import { removePlayerFromRedisLobby, getRedisLobbyPlayers } from "../runtime/roomStore.js"; // Cleanup functions
-import { handleStartQuiz } from "./Handlers/startGame.js";
-import { handleSubmitAnswer } from "./Handlers/submitAnswer.js";
+import { handleStartQuiz } from "./handlers/startGame.js";
+import { handleSubmitAnswer } from "./handlers/submitAnswer.js";
+import { terminateOrphanedRoomTimer } from "../runtime/roomRuntime.js";
 import { User } from "../models/user.model.js";
 
 
@@ -30,21 +31,29 @@ export const registerSocketEvents = (io) => {
             const { roomCode, userId } = socket;
 
             if (roomCode && userId) {
+                const cleanCode = roomCode.toUpperCase().trim();
                 // High-speed RAM pipeline: Redis Set se is user ka ID delete karo
-                await removePlayerFromRedisLobby(roomCode, userId);
-                console.log(` Cleaned ghost player [${userId}] from Redis room: ${roomCode}`);
+                await removePlayerFromRedisLobby(cleanCode, userId);
+                console.log(` Cleaned ghost player [${userId}] from Redis room: ${cleanCode}`);
 
-                // Real-time Sync: Ab bache hue active members ki list nikaalo
-                const remainingPlayerIds = await getRedisLobbyPlayers(roomCode);
+                const remainingActivePlayersCount = await getRedisLobbyCount(cleanCode);
 
-                // MongoDB se un bache hue users ki display profiles fetch karo
-                const hydratedPlayersList = await User.find({ _id: { $in: remainingPlayerIds } })
-                    .select("username avatar");
+                if (remainingActivePlayersCount <= 0) {
+                    terminateOrphanedRoomTimer(cleanCode);
+                } else {
 
-                // Poore room me broadcast kardo taaki baaki players ki screen par ye user instantly gayab ho jaye!
-                io.to(roomCode).emit("player-list-updated", {
-                    players: hydratedPlayersList
-                });
+                    // Real-time Sync: Ab bache hue active members ki list nikaalo
+                    const remainingPlayerIds = await getRedisLobbyPlayers(cleanCode);
+
+                    // MongoDB se un bache hue users ki display profiles fetch karo
+                    const hydratedPlayersList = await User.find({ _id: { $in: remainingPlayerIds } })
+                        .select("username avatar");
+
+                    // Poore room me broadcast kardo taaki baaki players ki screen par ye user instantly gayab ho jaye!
+                    io.to(cleanCode).emit("player-list-updated", {
+                        players: hydratedPlayersList
+                    });
+                }                    
             }
         });
     });

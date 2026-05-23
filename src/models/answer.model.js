@@ -8,7 +8,7 @@ const answerSchema = new mongoose.Schema({
     },
     player:{
         type: mongoose.Schema.Types.ObjectId,
-        ref :"Player",
+        ref :"User",
         required : true
     },
     question:{

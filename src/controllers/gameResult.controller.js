@@ -27,6 +27,7 @@ const getUserGameHistory = asyncHandler(async (req, res) => {
     const games = await GameResult.find(historyFilter)
         .populate("room", "title") 
         .populate("winner", "username avatar") 
+        .populate("leaderboard.player", "username avatar")
         .sort({ createdAt: -1 }) 
         .skip(skip)
         .limit(limit);

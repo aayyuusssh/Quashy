@@ -8,14 +8,14 @@ const gameResultSchema = new mongoose.Schema({
     },
     winner :{
         type : mongoose.Schema.Types.ObjectId,
-        ref : "Player",
+        ref : "User",
         required : true,
     },
     leaderboard : [
         {
             player : {
                 type : mongoose.Schema.Types.ObjectId,
-                ref : "Player",
+                ref : "User",
                 required: true
             },
             finalScore : {

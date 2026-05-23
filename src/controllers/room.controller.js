@@ -24,8 +24,12 @@ const createRoom = asyncHandler(async(req , res)=> {
         throw new ApiError(400 , " Title is missing")
     }
 
-    if(!maxPlayers){
+    if(maxPlayers == null ){
         throw new ApiError(400 , "maxPlayers details is required")
+    }
+
+    if (maxPlayers < 1 || maxPlayers > 150) {
+        throw new ApiError(400, "maxPlayers must be between 1 and 150");
     }
 
     const roomCode = await generateUniqueRoomCode();
@@ -38,7 +42,7 @@ const createRoom = asyncHandler(async(req , res)=> {
         title : title.trim(),
         host : hostId,
         roomCode,
-        maxPlayers : maxPlayers || 20,
+        maxPlayers : maxPlayers,
         status: "waiting"
     })
 

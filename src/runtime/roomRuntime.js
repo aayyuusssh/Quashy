@@ -8,6 +8,7 @@ import { getRedisLiveLeaderboard } from "./roomStore.js";
 // Global in-memory reference object to track active room intervals
 // Key: roomCode -> Value: setInterval ID pointer
 const activeRoomTimers = {};
+export const activeRoundStartTimeStamps = {};
 
 /**
  * Self-driving real-time engine that orchestrates question rounds sequentially.
@@ -40,6 +41,9 @@ export const runGameLoopEngine = async (io, roomCode, roomId, currentRound = 1) 
 
         const questionData = currentMapping.question;
         let secondsRemaining = questionData.duration || 30; // Hydrate timer length
+
+
+        activeRoundStartTimeStamps[cleanCode] = Date.now();
 
         // 3. BROADCAST QUESTION DATA (Hides 'correctAnswer' key to block client-side inspect source cheating)
         io.to(cleanCode).emit("round-started", {
@@ -102,6 +106,17 @@ export const runGameLoopEngine = async (io, roomCode, roomId, currentRound = 1) 
     }
 };
 
+
+export const terminateOrphanedRoomTimer = (roomCode) => {
+    const cleanCode = roomCode.toUpperCase().trim();
+    if (activeRoomTimers[cleanCode]) {
+        clearInterval(activeRoomTimers[cleanCode]);
+        delete activeRoomTimers[cleanCode];
+        delete activeRoundStartTimeStamps[cleanCode]; // Purge timestamp reference
+        console.log(`🧹 Memory Safety Cleanup: Terminated active countdown interval for abandoned room: ${cleanCode}`);
+    }
+};
+
 /**
  * Handles compiling final scores, saving persistent history archives, and recycling room structures.
  * @param {Object} io - Global Socket.io instance
@@ -115,6 +130,7 @@ const handleGameOverArchive = async (io, roomCode, currentRound) => {
         // 1. Flush memory ticking loops from server processes
         if (activeRoomTimers[cleanCode]) clearInterval(activeRoomTimers[cleanCode]);
         delete activeRoomTimers[cleanCode];
+        delete activeRoundStartTimeStamps[cleanCode];
 
         // 2. Locate room rules document from MongoDB
         const room = await Room.findOne({ roomCode: cleanCode, status: "active" });

@@ -2,99 +2,107 @@ import { RoomQuestion } from "../../models/roomQuestion.model.js";
 import { Answer } from "../../models/answer.model.js";
 import { Room } from "../../models/room.model.js";
 import { incrementRedisPlayerScore } from "../../runtime/roomStore.js";
+import { activeRoundStartTimeStamps } from "../../runtime/roomRuntime.js";
 
 export const handleSubmitAnswer = (io, socket) => {
     socket.on("submit-answer", async (payload) => {
         try {
+            // Securely grab cached data from the authenticated socket instance context
             const { roomCode, userId } = socket;
-            const { sequenceNumber, submittedOptionId, serverTimerSnapshot } = payload;
+            const { sequenceNumber, submittedOptionId } = payload;
 
-            // What did the backend actually receive?
-            // console.log(" [CHECKPOINT 1] Received Payload:", {
-            //     socketRoomCode: roomCode,
-            //     socketUserId: userId,
-            //     payloadSeq: sequenceNumber,
-            //     payloadOption: submittedOptionId,
-            //     payloadTimer: serverTimerSnapshot
-            // });
-
-            if (!roomCode || !userId || !submittedOptionId) {
-                console.log(" Missing core fields in socket context or payload");
-                return;
+            if (!roomCode || !userId || typeof submittedOptionId !== 'string' || !submittedOptionId  || sequenceNumber == null || !Number.isInteger(Number(sequenceNumber)) || Number(sequenceNumber) < 0) {
+                return socket.emit("submission-error", { message: "Invalid payload: Missing context parameters." });
             }
 
-            // TIMING VALIDATION SHIELD
-            if (serverTimerSnapshot <= 0) {
-                console.log("Dropped: Time already expired! snapshot <= 0");
-                return socket.emit("submission-error", { message: "Time expired! Submission dropped." });
+
+            const cleanCode = roomCode.toUpperCase().trim();
+
+            // 1. ANTI-SPAM WEB-SOCKET RATELIMIT TRACKER
+            // Blocks automated loops from hammering the database with a 400ms cooldown barrier
+            const now = Date.now();
+            if (socket.lastSubmissionTime && (now - socket.lastSubmissionTime < 400)) {
+                return socket.emit("submission-error", { message: "Spam Guard Active: Multi-clicking is blocked." });
+            }
+            socket.lastSubmissionTime = now;
+
+            // 2. CRYPTOGRAPHIC TIME EVALUATOR
+            // Read true server timestamp when this specific round was broadcasted
+            const roundStartTime = activeRoundStartTimeStamps[cleanCode];
+            if (!roundStartTime) {
+                return socket.emit("submission-error", { message: "Submission rejected: No active round timer found." });
             }
 
-            // FETCH REAL ACTIVE ROOM DATA
-            const activeRoomData = await Room.findOne({ roomCode: roomCode, status: "active" });
-            
-            // console.log(" [CHECKPOINT 2] Active Room DB Query Result:", activeRoomData ? `Found Room ID: ${activeRoomData._id}` : "NOT FOUND IN DB");
+            // Calculate precise elapsed time completely on the server
+            const elapsedMilliseconds = Date.now() - roundStartTime;
+            const elapsedSeconds = elapsedMilliseconds / 1000;
 
+            // 3. FETCH ACTIVE ROOM DOCUMENT DYNAMICALLY FROM DB USING THE CODE
+            const activeRoomData = await Room.findOne({ roomCode: cleanCode, status: "active" });
             if (!activeRoomData) {
-                console.log(` No active room found for code ${roomCode}`);
-                return;
+                return socket.emit("submission-error", { message: "Submission rejected: Room is no longer active." });
             }
 
-            // FETCH QUESTION MAPPING
+            // 4. LOCATE ACCURATE QUESTION SCHEMATICS
             const mapping = await RoomQuestion.findOne({ 
                 room: activeRoomData._id, 
                 sequenceNumber: Number(sequenceNumber) 
             }).populate("question");
 
-            //  Did we find the question sequence mapping?
-            // console.log("[CHECKPOINT 3] RoomQuestion Mapping Query Result:", mapping ? `Found Question: ${mapping.question?.questionText?.substring(0, 20)}...` : "NOT FOUND IN DB");
-
-            if (!mapping) {
-                console.log(` No question mapped for sequenceNumber ${sequenceNumber} in this room.`);
-                return;
+            if (!mapping || !mapping.question) {
+                return socket.emit("submission-error", { message: "Error: Question mapping sequence corrupted or missing." });
             }
 
             const questionData = mapping.question;
+            const totalRoundDuration = questionData.duration || 30;
 
-            //  SECURE PREVENT DOUBLE SUBMISSIONS
+            // Calculate exact remaining seconds using server-driven timeline
+            const absoluteServerRemainingTime = totalRoundDuration - elapsedSeconds;
+
+            // 5. SERVER TIME WINDOW SECURITY CLOSURE
+            // Drop client payloads instantly if they land after the server clock has touched zero
+            if (absoluteServerRemainingTime <= 0) {
+                return socket.emit("submission-error", { message: "Time expired! Submission dropped by the server clock." });
+            }
+
+            // 6. BLOCK DOUBLE SUBMISSION EXPLOITS
             const alreadyAnswered = await Answer.findOne({
-                room: mapping.room,
+                room: activeRoomData._id,
                 player: userId,
                 question: questionData._id
             });
 
-            //  DEBUG CHECKPOINT 4: Has the player already submitted for this question?
-            // console.log("  Double Submission Check Result:", alreadyAnswered ? "ALREADY ANSWERED" : "CLEAN (FIRST TIME)");
-
             if (alreadyAnswered) {
-                console.log(" Dropped at Checkpoint 4: Prevented duplicate submission attempt");
-                return socket.emit("submission-error", { message: "Security Warning: You have already submitted an answer for this round!" });
+                return socket.emit("submission-error", { message: "Security Warning: Option already logged for this question." });
             }
+            
 
-            //  EVALUATION & SCORING
-            const isCorrectAnswer = questionData.correctAnswer === submittedOptionId.trim().toUpperCase();
+            // 7. MULTIPLIER SCORING MATRIX COMPLETELY VERIFIED BY SERVER TIMERS
+            const isCorrectAnswer = questionData.correctAnswer.trim().toUpperCase() === submittedOptionId.trim().toUpperCase();
+            
             let pointsEarned = 0;
-            const totalRoundDuration = questionData.duration || 30;
-
             if (isCorrectAnswer) {
-                const speedFraction = serverTimerSnapshot / totalRoundDuration;
-                pointsEarned = 500 + Math.round(speedFraction * 500);
+                const speedFraction = absoluteServerRemainingTime / totalRoundDuration;
+                pointsEarned = 500 + Math.round(speedFraction * 500); // Dynamic bonus points scale from 500 up to 1000
             }
 
+            // 8. WRITE PERFORMANCE TO IN-MEMORY RAM STORAGE (Redis)
             if (pointsEarned > 0) {
-                await incrementRedisPlayerScore(roomCode, userId, pointsEarned);
-                console.log(` Player [${userId}] earned +${pointsEarned} pts inside Redis memory pool.`);
+                await incrementRedisPlayerScore(cleanCode, userId, pointsEarned);
+                console.log(`Server verified score! Player [${userId}] earned +${pointsEarned} pts inside Redis RAM.`);
             }
 
+            // 9. PERSISTENT LONG-TERM TRANSACTION WRITE (MongoDB History Logs)
             await Answer.create({
-                room: mapping.room,
+                room: activeRoomData._id,
                 player: userId,
                 question: questionData._id,
                 submittedAnswer: submittedOptionId,
                 isCorrect: isCorrectAnswer,
-                responseTimeMs: (totalRoundDuration - serverTimerSnapshot) * 1000
+                responseTimeMs: elapsedMilliseconds // Logs real network connection latency
             });
 
-            // console.log("SUCCESS: Sending acknowledgment packet back to client!");
+            // Fire response packet back to player tab view
             socket.emit("answer-acknowledged", { 
                 success: true, 
                 isCorrect: isCorrectAnswer,
@@ -103,6 +111,7 @@ export const handleSubmitAnswer = (io, socket) => {
 
         } catch (error) {
             console.error(" Exception captured inside submit-answer handler:", error.message);
+            socket.emit("submission-error", { message: "Internal server anomaly while logging option submission." });
         }
     });
 };
