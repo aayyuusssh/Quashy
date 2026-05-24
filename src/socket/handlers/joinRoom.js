@@ -5,7 +5,6 @@ import {
     getRedisLobbyCount, 
     getRedisLobbyPlayers 
 } from "../../runtime/roomStore.js";
-
 /**
  * Handles a user physically entering a live quiz lobby via WebSockets.
  * @param {Object} io - The main global Socket.io instance
@@ -44,7 +43,8 @@ export const handleJoinLobby = (io, socket) => {
                 return socket.emit("room-full", { message: "This game room has hit maximum player capacity" });
             }
 
-            //  MEMORY STATE COMMIT
+        
+
             // Add the player's User ID to our ultra-fast Redis Set
             await addPlayerToRedisLobby(cleanCode, userId);
 
