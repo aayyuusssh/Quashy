@@ -1,16 +1,16 @@
-import { app } from "./app.js";
 import ConnectDB from "./config/db.js";
 import dotenv from "dotenv"
+
+dotenv.config({
+    path:"./.env"
+})
+import { app } from "./app.js";
 import mongoose from "mongoose";
 import http from "http";
 import { Server } from "socket.io";
 import { initSocketServer } from "../src/config/socket.js";
 import { registerSocketEvents } from "../src/socket/events.js";
 import { connectRedis } from "../src/config/redis.js";
-
-dotenv.config({
-    path:"./.env"
-})
 
 // INDUSTRY PATTERN: Wrap your Express application instance inside a native HTTP server.
 // This allows a single port (e.g., 8000) to safely split standard HTTP traffic and WebSockets traffic.

@@ -4,6 +4,9 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import jwt from "jsonwebtoken"
+import crypto  from "crypto"; // Native Node module for generating random values
+import { redisClient } from "../config/redis.js";
+import { mailTransporter } from "../config/mail.js";
 
 const registerUser = asyncHandler(async(req ,res)=>{
     // get user details(username ,email , fullName , password) from req.body
@@ -33,43 +36,147 @@ const registerUser = asyncHandler(async(req ,res)=>{
         throw new ApiError(409 , "User already exists with same email or username")
     }
 
-    const avatarLocalPath = req.files?.avatar?.[0]?.path;
+    //  Generate secure, unpredictable 6-digit numeric OTP
+    // crypto.randomInt guarantees true mathematical randomness
+    const otp = crypto.randomInt(100000, 999999).toString();
 
-    let avatar = null;
-    if(avatarLocalPath){
-        avatar = await uploadOnCloudinary(avatarLocalPath);
+     //  Cache full payload inside Redis RAM with a strict 5-minute expiration window (300 seconds)
+    const temporaryRegistrationPayload = {
+        username,
+        email: email.toLowerCase(),
+        fullName,
+        password, // Your User model's pre-save schema hooks will automatically hash this later during creation!
+        otp,
+        avatarLocalPath: req.file?.path || "" // Store local multer pointer to upload to Cloudinary later
+    };
 
-        if(!avatar){
-            throw new ApiError(500 , "Avatar file is missing")
-        }
-    }
+    // Store in Redis as a stringified JSON block mapped to the email key
+    await redisClient.set(
+        `registration:${email.toLowerCase()}`, 
+        JSON.stringify(temporaryRegistrationPayload),
+        { EX: 300 } // Auto-Purges completely from RAM memory in 5 minutes!
+    );
 
-    const user = await User.create({
-        email,
-        username : username.toLowerCase(),
-        fullName ,
-        password,
-        avatar : {
-            url : avatar?.secure_url || "",
-            public_id : avatar?.public_id || ""
-        },
+    // 5. DISPATCH THE REAL SYSTEM EMAIL
+    const mailOptions = {
+        from: '"Quashy" <no-reply@quashy.com>',
+        to: email.toLowerCase(),
+        subject: "Verify Your Quashy Account Registration OTP",
+        html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee;">
+                <h2>Welcome to Quashy, ${username}!</h2>
+                <p>Please use the following 6-digit security code to verify your email address:</p>
+                <h1 style="background: #f4f4f4; padding: 10px; text-align: center; letter-spacing: 5px; color: #4A90E2;">${otp}</h1>
+                <p style="color: #999; font-size: 12px;">This code is highly sensitive and will expire automatically in 5 minutes.</p>
+            </div>
+        `
+    };
 
-    })
-
-    const createdUser = await User.findById(user?._id).select("-password -refreshToken")
-    // console.log(createdUser);
-    
-    if(!createdUser){
-        throw new ApiError(500 , "Something went wrong while registering the user")
-    }
+    await mailTransporter.sendMail(mailOptions);
+    console.log(`Registration security OTP sent successfully to: ${email}`);
 
     return res
-    .status(201)
-    .json(
-        new ApiResponse(200 , createdUser , "user created successfully")
-    )
+        .status(200)
+        .json(new ApiResponse(200, { email }, "Verification security OTP dispatched to your email address."));
+
+
+
+    // const avatarLocalPath = req.files?.avatar?.[0]?.path;
+
+    // let avatar = null;
+    // if(avatarLocalPath){
+    //     avatar = await uploadOnCloudinary(avatarLocalPath);
+
+    //     if(!avatar){
+    //         throw new ApiError(500 , "Avatar file is missing")
+    //     }
+    // }
+
+    // const user = await User.create({
+    //     email,
+    //     username : username.toLowerCase(),
+    //     fullName ,
+    //     password,
+    //     avatar : {
+    //         url : avatar?.secure_url || "",
+    //         public_id : avatar?.public_id || ""
+    //     },
+
+    // })
+
+    // const createdUser = await User.findById(user?._id).select("-password -refreshToken")
+    // // console.log(createdUser);
+    
+    // if(!createdUser){
+    //     throw new ApiError(500 , "Something went wrong while registering the user")
+    // }
+
+    // return res
+    // .status(201)
+    // .json(
+    //     new ApiResponse(200 , createdUser , "user created successfully")
+    // )
 
 });
+
+const verifyOTP = asyncHandler(async (req, res) => {
+    const { email, otp } = req.body;
+
+    if (!email || !otp) {
+        throw new ApiError(400, "Email parameter and 6-digit verification code are required");
+    }
+       
+    // Validate OTP format
+    if (!/^\d{6}$/.test(otp.trim())) {
+        throw new ApiError(400, "Invalid OTP format. Must be 6 digits.");
+    }
+
+    // Validate email format
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+        throw new ApiError(400, "Invalid email format.");
+    }
+
+    // Fetch cache data block out of Redis memory
+    const cachedDataString = await redisClient.get(`registration:${email.toLowerCase()}`);
+    if (!cachedDataString) {
+        throw new ApiError(400, "Verification window expired! Please register again to generate a new token.");
+    }
+
+    const cachedData = JSON.parse(cachedDataString);
+
+    // 2. CHECK KEY VALIDITY
+    if (cachedData.otp !== otp.trim()) {
+        throw new ApiError(400, "Invalid verification security code. Please check your inbox and try again.");
+    }
+
+    // 3. CLOUDINARY FILE UPLOAD STREAM ONCE CERTIFIED
+    let avatar = "";
+    if (cachedData.avatarLocalPath) {
+        const cloudinaryResponse = await uploadOnCloudinary(cachedData.avatarLocalPath);
+        avatar = cloudinaryResponse || "";
+    }
+
+    // 4. ATOMIC PERMANENT COMMIT TO MONGODB
+    const user = await User.create({
+        username: cachedData.username,
+        email: cachedData.email,
+        fullName: cachedData.fullName,
+        password: cachedData.password, // Pre-save hooks trigger here to securely encrypt
+        avatar: {
+            url: avatar?.url || "",
+            public_id: avatar?.public_id || "" 
+        }
+    });
+
+    // 5. PURGE TEMPORARY CACHE IMMEDIATELY FROM REDIS
+    await redisClient.del(`registration:${email.toLowerCase()}`);
+    console.log(`User profile ${user.username} securely written to DB. Cache cleared.`);
+
+    return res
+        .status(201) // 201 Created REST status code
+        .json(new ApiResponse(201, { username: user.username, email: user.email }, "Account verified and registered successfully!"));
+});
+
 
 const generateAccessAndRefreshToken = async(userId)=> {
     try{
@@ -478,6 +585,7 @@ const deleteAccount = asyncHandler(async (req, res) => {
 
 export {
     registerUser,
+    verifyOTP,
     generateAccessAndRefreshToken,
     loginUser,
     logoutUser,
